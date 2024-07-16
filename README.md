@@ -1,14 +1,21 @@
+This repository is a re-implementation of the paper [Graph Neural Network-Based Anomaly Detection in Multivariate Time Series(AAAI'21)](https://arxiv.org/pdf/2106.06947.pdf) to make it work in recent PyG versions
+
+### Environment
+* torch == 2.2.1
+* cuda == 12.1
+* torch_geometric == 2.5.3
+* torch-scatter == 2.1.2
+* torch_sparse == 0.6.18+pt22cu121
+* torch_cluster == 1.6.3+pt22cu121
+* torch_spline_conv == 1.2.2+pt22cu121
+
+
+Below is the original README from the original repo : https://github.com/d-ailin/GDN
+
+
 # GDN
 
 Code implementation for : [Graph Neural Network-Based Anomaly Detection in Multivariate Time Series(AAAI'21)](https://arxiv.org/pdf/2106.06947.pdf)
-
-
-# Installation
-### Requirements
-* Python >= 3.6
-* cuda == 10.2
-* [Pytorch==1.5.1](https://pytorch.org/)
-* [PyG: torch-geometric==1.5.0](https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html)
 
 ### Install packages
 ```
