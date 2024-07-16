@@ -81,7 +81,7 @@ def train(model = None, save_path = '', config={},  train_dataloader=None, val_d
 
         # each epoch
         print('epoch ({} / {}) (Loss:{:.8f}, ACU_loss:{:.8f})'.format(
-                        i_epoch, epoch, 
+                        i_epoch + 1, epoch, 
                         acu_loss/len(dataloader), acu_loss), flush=True
             )
 

@@ -3,6 +3,7 @@ from torch.nn import Parameter, Linear, Sequential, BatchNorm1d, ReLU
 import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import remove_self_loops, add_self_loops, softmax
+import torch_scatter
 
 from torch_geometric.nn.inits import glorot, zeros
 import time
@@ -11,7 +12,7 @@ import math
 class GraphLayer(MessagePassing):
     def __init__(self, in_channels, out_channels, heads=1, concat=True,
                  negative_slope=0.2, dropout=0, bias=True, inter_dim=-1,**kwargs):
-        super(GraphLayer, self).__init__(aggr='add', **kwargs)
+        super(GraphLayer, self).__init__(node_dim=0, **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -51,18 +52,22 @@ class GraphLayer(MessagePassing):
 
 
     def forward(self, x, edge_index, embedding, return_attention_weights=False):
-        """"""
-        if torch.is_tensor(x):
-            x = self.lin(x)
-            x = (x, x)
-        else:
-            x = (self.lin(x[0]), self.lin(x[1]))
+        """
+        Args:
+            x: [# nodes, # features]
+            edge_index: [2, # edges]
+            embedding: [# nodes, embed_dim]
+            return_attention_weights: bool
+
+        Returns:
+            out: 
+        """
+        x = self.lin(x)
 
         edge_index, _ = remove_self_loops(edge_index)
-        edge_index, _ = add_self_loops(edge_index,
-                                       num_nodes=x[1].size(self.node_dim))
+        edge_index, _ = add_self_loops(edge_index, num_nodes=x.size()[0])
 
-        out = self.propagate(edge_index, x=x, embedding=embedding, edges=edge_index,
+        out = self.propagate(edge_index, x=x, embedding=embedding,
                              return_attention_weights=return_attention_weights)
 
         if self.concat:
@@ -79,43 +84,46 @@ class GraphLayer(MessagePassing):
         else:
             return out
 
-    def message(self, x_i, x_j, edge_index_i, size_i,
+    # j: neighbor of node i
+    # i: target
+    def message(self, x_i, x_j, edge_index_i, edge_index_j, size_i,
                 embedding,
-                edges,
                 return_attention_weights):
 
-        x_i = x_i.view(-1, self.heads, self.out_channels)
+        x_i = x_i.view(-1, self.heads, self.out_channels)  # [E, # head, dim]
         x_j = x_j.view(-1, self.heads, self.out_channels)
 
         if embedding is not None:
-            embedding_i, embedding_j = embedding[edge_index_i], embedding[edges[0]]
+            embedding_i, embedding_j = embedding[edge_index_i], embedding[edge_index_j]
             embedding_i = embedding_i.unsqueeze(1).repeat(1,self.heads,1)
             embedding_j = embedding_j.unsqueeze(1).repeat(1,self.heads,1)
 
             key_i = torch.cat((x_i, embedding_i), dim=-1)
             key_j = torch.cat((x_j, embedding_j), dim=-1)
 
-
-
         cat_att_i = torch.cat((self.att_i, self.att_em_i), dim=-1)
         cat_att_j = torch.cat((self.att_j, self.att_em_j), dim=-1)
 
         alpha = (key_i * cat_att_i).sum(-1) + (key_j * cat_att_j).sum(-1)
 
-
         alpha = alpha.view(-1, self.heads, 1)
 
 
         alpha = F.leaky_relu(alpha, self.negative_slope)
-        alpha = softmax(alpha, edge_index_i, size_i)
+        alpha = softmax(alpha, edge_index_i, num_nodes=size_i)
 
         if return_attention_weights:
             self.__alpha__ = alpha
 
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
+        result = x_j * alpha.view(-1, self.heads, 1)
         
-        return x_j * alpha.view(-1, self.heads, 1)
+        return result
+    
 
+    def aggregate(self, inputs, index, dim_size=None):
+        out = torch_scatter.scatter(inputs, index, dim=self.node_dim, dim_size=dim_size, reduce='sum')
+        return out
 
 
     def __repr__(self):

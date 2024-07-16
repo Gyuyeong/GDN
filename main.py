@@ -19,7 +19,7 @@ from models.GDN import GDN
 
 from train import train
 from test  import test
-from evaluate import get_err_scores, get_best_performance_data, get_val_performance_data, get_full_err_scores
+from evaluate import get_best_performance_data, get_val_performance_data, get_full_err_scores, get_tsne, get_individual_err_scores, plot_anomalies, plot_graph_with_attention_weight
 
 import sys
 from datetime import datetime
@@ -28,10 +28,10 @@ import os
 import argparse
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-
 import json
 import random
+
+from torch_geometric.utils import remove_self_loops
 
 class Main():
     def __init__(self, train_config, env_config, debug=False):
@@ -125,6 +125,53 @@ class Main():
 
         self.get_score(self.test_result, self.val_result)
 
+        
+
+        # plot node embedding
+        if len(self.feature_map) > 5:
+            learned_embeddings = self.model.embedding(torch.arange(0, len(self.feature_map)).to(self.device)).cpu().detach().numpy()
+            get_tsne(embeddings=learned_embeddings, 
+                     feature_map=self.feature_map, 
+                     dataset=self.env_config['dataset'])  # need at least 5 nodes for this to work
+            
+        # plot anomaly based on error scores
+        # 1. get threshold based on validation error score
+        val_pred, val_gt, _ = self.val_result
+        val_error_scores = get_individual_err_scores(val_pred, val_gt)
+        thresholds = np.max(val_error_scores, axis=0)
+
+        # 2. plot anomalies with test results
+        test_pred, test_gt, test_label = self.test_result
+        test_error_scores = get_individual_err_scores(test_pred, test_gt)
+
+        plot_anomalies(test_pred, test_gt, test_label, 
+                       feature_map=self.feature_map, 
+                       dataset=self.env_config['dataset'], 
+                       test_error_score=test_error_scores, 
+                       thresholds=thresholds)
+        
+        # plot graph according to attention weight
+        attention_weights = torch.zeros((len(self.feature_map), self.train_config['topk']))
+
+        edge_index = self.model.gnn_layers[0].edge_index_1.cpu().detach()
+        attention_weight = self.model.gnn_layers[0].att_weight_1[:, 0, 0].cpu().detach()
+
+        for b in range(train_config['batch']):
+            start = b * len(self.feature_map)
+            for sensor in range(start, len(self.feature_map) + start):
+                indices = (edge_index[1] == sensor).nonzero(as_tuple=True)[0]
+                if len(indices) == 0:
+                    break
+                attention_weights[sensor - start] += attention_weight[indices]
+
+        attention_weights /= self.train_config['batch']
+
+        edge_index_without_self_loop, _ = remove_self_loops(edge_index[:, :len(self.feature_map) * (self.train_config['topk'] - 1)])
+        edge_attr = attention_weights[:, :-1]
+        learned_embeddings = self.model.embedding(torch.arange(len(self.feature_map)).to(self.device)).cpu().detach().numpy()
+        
+        plot_graph_with_attention_weight(learned_embeddings, edge_index_without_self_loop, edge_attr, self.feature_map, self.env_config['dataset'])
+
     def get_loaders(self, train_dataset, seed, batch, val_ratio=0.1):
         dataset_len = int(len(train_dataset))
         train_use_len = int(dataset_len * (1 - val_ratio))
@@ -171,7 +218,9 @@ class Main():
 
         print(f'F1 score: {info[0]}')
         print(f'precision: {info[1]}')
-        print(f'recall: {info[2]}\n')
+        print(f'recall: {info[2]}')
+        print(f'auc score: {info[3]}')
+        # print(f'threshold: {info[4]}\n')
 
 
     def get_save_path(self, feature_name=''):
@@ -180,7 +229,7 @@ class Main():
         
         if self.datestr is None:
             now = datetime.now()
-            self.datestr = now.strftime('%m|%d-%H:%M:%S')
+            self.datestr = now.strftime('%m-%d-%H-%M-%S')
         datestr = self.datestr          
 
         paths = [
@@ -198,13 +247,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-batch', help='batch size', type = int, default=128)
+    parser.add_argument('-batch', help='batch size', type = int, default=4)
     parser.add_argument('-epoch', help='train epoch', type = int, default=100)
     parser.add_argument('-slide_win', help='slide_win', type = int, default=15)
     parser.add_argument('-dim', help='dimension', type = int, default=64)
     parser.add_argument('-slide_stride', help='slide_stride', type = int, default=5)
     parser.add_argument('-save_path_pattern', help='save path pattern', type = str, default='')
-    parser.add_argument('-dataset', help='wadi / swat', type = str, default='wadi')
+    parser.add_argument('-dataset', help='wadi / swat', type = str, default='msl')
     parser.add_argument('-device', help='cuda / cpu', type = str, default='cuda')
     parser.add_argument('-random_seed', help='random seed', type = int, default=0)
     parser.add_argument('-comment', help='experiment comment', type = str, default='')
@@ -218,6 +267,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # set random seeds
     random.seed(args.random_seed)
     np.random.seed(args.random_seed)
     torch.manual_seed(args.random_seed)

@@ -120,6 +120,10 @@ class GDN(nn.Module):
 
 
     def forward(self, data, org_edge_index):
+        """
+        Args:
+            data: [# batches, # nodes, # features]
+        """
 
         x = data.clone().detach()
         edge_index_sets = self.edge_index_sets
@@ -127,7 +131,7 @@ class GDN(nn.Module):
         device = data.device
 
         batch_num, node_num, all_feature = x.shape
-        x = x.view(-1, all_feature).contiguous()
+        x = x.view(-1, all_feature).contiguous()  # [# batch * # nodes, # features]
 
 
         gcn_outs = []
@@ -145,20 +149,23 @@ class GDN(nn.Module):
             weights_arr = all_embeddings.detach().clone()
             all_embeddings = all_embeddings.repeat(batch_num, 1)
 
+            # calculate cosine similarity for every two node embeddings
             weights = weights_arr.view(node_num, -1)
 
             cos_ji_mat = torch.matmul(weights, weights.T)
             normed_mat = torch.matmul(weights.norm(dim=-1).view(-1,1), weights.norm(dim=-1).view(1,-1))
             cos_ji_mat = cos_ji_mat / normed_mat
 
+            # select topk similar nodes for every node
             dim = weights.shape[-1]
             topk_num = self.topk
 
-            topk_indices_ji = torch.topk(cos_ji_mat, topk_num, dim=-1)[1]
+            topk_indices_ji = torch.topk(cos_ji_mat, topk_num, dim=-1).indices
 
             self.learned_graph = topk_indices_ji
 
-            gated_i = torch.arange(0, node_num).T.unsqueeze(1).repeat(1, topk_num).flatten().to(device).unsqueeze(0)
+            # create edges based on the topk indices for each node
+            gated_i = torch.arange(0, node_num).unsqueeze(1).repeat(1, topk_num).flatten().to(device).unsqueeze(0)
             gated_j = topk_indices_ji.flatten().unsqueeze(0)
             gated_edge_index = torch.cat((gated_j, gated_i), dim=0)
 
@@ -171,10 +178,11 @@ class GDN(nn.Module):
         x = torch.cat(gcn_outs, dim=1)
         x = x.view(batch_num, node_num, -1)
 
-
+        # for each node representation, element-wise multiply with corresponding embedding
         indexes = torch.arange(0,node_num).to(device)
         out = torch.mul(x, self.embedding(indexes))
         
+        # fully connected layer
         out = out.permute(0,2,1)
         out = F.relu(self.bn_outlayer_in(out))
         out = out.permute(0,2,1)
@@ -183,6 +191,6 @@ class GDN(nn.Module):
         out = self.out_layer(out)
         out = out.view(-1, node_num)
    
-
+        # prediction of sensor value at time t
         return out
         
